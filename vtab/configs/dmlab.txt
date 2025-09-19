@@ -1,0 +1,6 @@
+close, negative reward
+close, positive reward
+far, negative reward
+far, positive reward
+very far, negative reward
+very far, positive reward

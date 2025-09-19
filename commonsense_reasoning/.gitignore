@@ -1,0 +1,7 @@
+__pycache__
+.idea/*
+/peft/src/peft/__pycache__
+dataset
+finetune_results
+*.json
+*.ipynb

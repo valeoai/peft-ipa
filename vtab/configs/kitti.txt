@@ -1,0 +1,4 @@
+within 8 m
+between 8 m and 20 m
+beyond 20 m
+no vehicle
