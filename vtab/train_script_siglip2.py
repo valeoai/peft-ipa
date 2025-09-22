@@ -56,7 +56,7 @@ def main():
     parser.add_argument("--batch_size",    type=int, default=64)
     parser.add_argument("--epochs",        type=int, default=100)
     parser.add_argument("--peft_model",    type=str, choices=["lora","dora","ipa"], required=True)
-    parser.add_argument("--ipa_mode",      type=str, default="pre_ipca_requires_grad")
+    parser.add_argument("--ipa_mode",      type=str, default="pre_ipca_requires_grad", choices=["pre_ipca_requires_grad","pre_ipca","pre_hebbian_requires_grad","pre_hebbian"])
     args = parser.parse_args()
 
     utils.mkdirss(args.exp_base_path)

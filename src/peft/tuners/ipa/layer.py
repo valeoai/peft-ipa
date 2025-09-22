@@ -50,26 +50,47 @@ def svd_flip(u: torch.Tensor, v: torch.Tensor, u_based_decision: bool = True) ->
 def incremental_mean_and_var(
     x: torch.Tensor, last_mean: torch.Tensor, last_variance: torch.Tensor, last_sample_count: torch.Tensor
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    new_sample_count = torch.tensor([x.shape[0]], device=x.device)
+    if x.shape[0] == 0:
+        return last_mean, last_variance, last_sample_count
+
+    new_sample_count = torch.tensor([x.shape[0]], device=x.device, dtype=last_sample_count.dtype)
     updated_sample_count = last_sample_count + new_sample_count
 
-    last_sum = last_mean * last_sample_count.to(last_mean.dtype)
-    new_sum = torch.sum(x, dim=0, keepdim=True)
+    if last_sample_count.item() == 0:
+        last_sum = torch.zeros_like(last_mean, dtype=torch.float64)
+    else:
+        last_sum = last_mean.double() * last_sample_count.double()
+
+    new_sum = torch.sum(x, dim=0, keepdim=True).double()
 
     updated_mean = (last_sum + new_sum) / updated_sample_count
+    updated_mean = updated_mean.to(last_mean.dtype)
 
-    new_unnormalized_variance = torch.sum((x - updated_mean) ** 2, dim=0, keepdim=True)
-    last_unnormalized_variance = last_variance * last_sample_count.to(last_variance.dtype)
+    if last_sample_count.item() == 0:
+        # First batch
+        if x.shape[0] == 1:
+            updated_variance = torch.zeros_like(last_variance)
+        else:
+            updated_variance = torch.var(x, dim=0, keepdim=True, unbiased=False)
+    else:
+        # Subsequent batches
+        new_mean = new_sum / new_sample_count
+        delta = new_mean - last_mean.double()
 
-    last_over_new_count = last_sample_count.to(x.dtype) / new_sample_count.to(x.dtype)
-    updated_unnormalized_variance = (
-        last_unnormalized_variance
-        + new_unnormalized_variance
-        + last_over_new_count
-        / updated_sample_count.to(x.dtype)
-        * (last_sum / last_over_new_count.to(last_sum.dtype) - new_sum) ** 2
-    )
-    updated_variance = updated_unnormalized_variance / updated_sample_count.to(updated_unnormalized_variance.dtype)
+        m_a = last_variance.double() * (last_sample_count - 1)
+        m_b = torch.var(x, dim=0, keepdim=True, unbiased=False).double() * (new_sample_count - 1)
+
+        M2 = (
+            m_a
+            + m_b
+            + delta**2
+            * last_sample_count.double()
+            * new_sample_count.double()
+            / updated_sample_count.double()
+        )
+        updated_variance = M2 / (updated_sample_count - 1)
+
+    updated_variance = updated_variance.to(last_variance.dtype)
 
     return updated_mean, updated_variance, updated_sample_count
 
@@ -100,7 +121,6 @@ class LinearProj(nn.Module):
         self.register_buffer("running_mean", torch.zeros((1, in_features), **factory_kwargs))
         self.register_buffer("running_var", torch.zeros((1, in_features), **factory_kwargs))
         self.register_buffer("is_first_run", torch.tensor(True, **factory_kwargs))
-        self.register_buffer("P", torch.eye(out_features, **factory_kwargs))
         self.register_buffer("singular_values", torch.zeros(out_features, **factory_kwargs))
         self.register_buffer("normalized_proj", None)
 
@@ -128,7 +148,7 @@ class LinearProj(nn.Module):
             else:
                 col_batch_mean = torch.mean(reshaped_x, dim=0, keepdim=True)
                 reshaped_x -= col_batch_mean
-                mean_correction_factor = torch.sqrt((self.n_samples_seen / n_total_samples.float()) * n_samples)
+                mean_correction_factor = torch.sqrt((self.n_samples_seen.double() / n_total_samples) * n_samples).float()
                 mean_correction = mean_correction_factor * (self.running_mean - col_batch_mean)
                 reshaped_x = torch.vstack(
                     (
