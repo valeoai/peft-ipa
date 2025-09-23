@@ -256,6 +256,9 @@ class IncrementalPCA:
             X, self.mean_, self.var_, self.n_samples_seen_
         )
 
+        print(col_mean.shape, col_var.shape, n_total_samples)
+        print(col_mean.dtype, col_var.dtype, col_var.dtype)
+
         if first_pass:
             X -= col_mean
         else:
