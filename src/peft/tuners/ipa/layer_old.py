@@ -279,6 +279,7 @@ class IncrementalPCA:
         else:
             U, S, Vt = self._svd_fn_full(X)
         U, Vt = self._svd_flip(U, Vt, u_based_decision=False)
+        print(U.dtype, Vt.dtype)
         explained_variance = S**2 / (n_total_samples - 1)
         explained_variance_ratio = S**2 / torch.sum(col_var * n_total_samples)
 

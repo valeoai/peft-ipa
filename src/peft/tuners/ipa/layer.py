@@ -34,8 +34,7 @@ from .dora import DoraLinearLayer
 
 from typing import Optional, Tuple
 
-
-def svd_flip(u: torch.Tensor, v: torch.Tensor, u_based_decision: bool = True) -> Tuple[torch.Tensor, torch.Tensor]:
+def svd_flip(u, v, u_based_decision=True):
     if u_based_decision:
         max_abs_cols = torch.argmax(torch.abs(u), dim=0)
         signs = torch.sign(u[max_abs_cols, range(u.shape[1])])
@@ -46,32 +45,13 @@ def svd_flip(u: torch.Tensor, v: torch.Tensor, u_based_decision: bool = True) ->
     v *= signs.view(-1, 1)
     return u, v
 
-def incremental_mean_and_var(
-    X: torch.Tensor,
-    last_mean: torch.Tensor,
-    last_var: torch.Tensor,
-    last_count: torch.Tensor
-) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    n = X.shape[0]
-    if n == 0:
-        return last_mean, last_var, last_count
-
-    X64 = X.to(torch.float64)
-    batch_mean = X64.mean(dim=0)
-    batch_var = X64.var(dim=0, unbiased=False)
-
-    if last_count == 0 or last_mean is None or last_var is None:
-        return batch_mean, batch_var, torch.tensor([n], device=X.device)
-
-    total_count = last_count + n
-    delta = batch_mean - last_mean
-    new_mean = last_mean + delta * n / total_count
-    m_a = last_var * last_count
-    m_b = batch_var * n
-    m2 = m_a + m_b + delta.pow(2) * last_count * n / total_count
-    new_var = m2 / total_count
-
-    return new_mean, new_var, total_count
+def incremental_mean(X, last_mean, last_sample_count):
+    new_sample_count = torch.tensor([X.shape[0]], device=X.device)
+    updated_sample_count = last_sample_count + new_sample_count
+    last_sum = last_mean * last_sample_count if last_sample_count > 0 else torch.zeros_like(last_mean)
+    new_sum = X.sum(dim=0, dtype=torch.float64)
+    updated_mean = (last_sum + new_sum) / updated_sample_count
+    return updated_mean, updated_sample_count
 
 class LinearProj(nn.Module):
     __constants__ = ["in_features", "out_features"]
@@ -95,11 +75,10 @@ class LinearProj(nn.Module):
         self.in_features = in_features
         self.out_features = out_features
         self.fixed_basis = fixed_basis
-        self.register_buffer("n_samples_seen", torch.tensor([0], device=device, dtype=torch.long))
+        self.register_buffer("n_samples_seen", torch.tensor([0], device=device))
         self.basis = nn.Parameter(torch.zeros((out_features, in_features), **factory_kwargs), requires_grad=not fixed_basis)
         self.register_buffer("components", torch.zeros((out_features, in_features), device=device, dtype=torch.float64))
-        self.register_buffer("running_mean", torch.zeros((in_features, ), device=device, dtype=torch.float64))
-        self.register_buffer("running_var", torch.zeros((in_features, ), device=device, dtype=torch.float64))
+        self.register_buffer("running_mean", torch.zeros(in_features, device=device, dtype=torch.float64))
         self.register_buffer("is_first_run", torch.tensor(True, device=device, dtype=torch.bool))
         self.register_buffer("singular_values", torch.zeros(out_features, device=device, dtype=torch.float64))
         self.register_buffer("normalized_proj", None)
@@ -111,16 +90,15 @@ class LinearProj(nn.Module):
         return F.linear(input, self.basis)
     
     @torch.no_grad()
-    def batched_incremental_pca_update(self, x: torch.Tensor, svd_niter=4):
+    def batched_incremental_pca_update(self, x: torch.Tensor, svd_niter=3):
         with torch.autocast(device_type="cuda", dtype=torch.float32):
             dim = x.size(-1)
             reshaped_x = x.reshape(-1, dim)
             n_samples = reshaped_x.size(0)
+
+            reshaped_x = reshaped_x.clone().to(torch.float32)
  
-            # Update running mean and variance
-            col_mean, col_var, n_total_samples = incremental_mean_and_var(
-                reshaped_x, self.running_mean, self.running_var, self.n_samples_seen
-            )
+            col_mean, n_total_samples = incremental_mean(reshaped_x, self.running_mean, self.n_samples_seen)
 
             if self.is_first_run:
                 reshaped_x -= col_mean
@@ -128,7 +106,7 @@ class LinearProj(nn.Module):
             else:
                 col_batch_mean = torch.mean(reshaped_x, dim=0)
                 reshaped_x -= col_batch_mean
-                mean_correction_factor = torch.sqrt((self.n_samples_seen.double() / n_total_samples) * n_samples).float()
+                mean_correction_factor = torch.sqrt((self.n_samples_seen.double() / n_total_samples) * n_samples)
                 mean_correction = mean_correction_factor * (self.running_mean - col_batch_mean)
                 reshaped_x = torch.vstack(
                     (
@@ -137,29 +115,26 @@ class LinearProj(nn.Module):
                         mean_correction,
                     )
                 )
- 
+
             U, S, V = torch.svd_lowrank(reshaped_x, q=self.out_features, niter=svd_niter)
             U, Vt = svd_flip(U, V.mH, u_based_decision=False)
  
-            self.n_samples_seen.copy_(n_total_samples)
-            self.singular_values.copy_(S[:self.out_features])
-            self.running_mean.copy_(col_mean)
-            self.running_var.copy_(col_var)
-            self.components = Vt[:self.out_features]
-            
-            self.basis.data = self.components.contiguous().to(dtype=self.basis.dtype)
+            self.n_samples_seen = n_total_samples
+            self.singular_values = S[:self.out_features]
+            self.components = Vt[:self.out_features].contiguous()
+            self.running_mean = col_mean
+            self.basis.data = self.components.to(dtype=self.basis.dtype)
 
     @torch.no_grad()
     def batched_hebbian_update(self, x: torch.Tensor, lr=1e-3, reortho=False):
         with torch.autocast(device_type="cuda", dtype=torch.float32):
-            x = x.reshape(-1, x.size(-1))
-            batch_mean = x.mean(dim=0)
-            batch_size = x.size(0)
+            reshaped_x = x.reshape(-1, x.size(-1))
+            batch_size = reshaped_x.size(0)
 
-            # compute the new total count
-            self.n_samples_seen.add_(batch_size)
-            self.running_mean += (batch_mean - self.running_mean) * (batch_size / self.n_samples_seen)
-
+            col_mean, n_total_samples = incremental_mean(reshaped_x, self.running_mean, self.n_samples_seen)
+            self.running_mean.copy_(col_mean)
+            self.n_samples_seen.copy_(n_total_samples)
+            
             x = x - self.running_mean
             y = x @ self.basis.t()
 
