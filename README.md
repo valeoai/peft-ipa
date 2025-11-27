@@ -136,4 +136,4 @@ We thank the authors of the numerous packages we used to achieve this work, nota
 
   * [**`peft`**](https://github.com/huggingface/peft) from HuggingFace.
   * [**`DoRA`**](https://github.com/NVlabs/DoRA) from NVIDIA (which includes benchmark code based on [LLM-Adapters](https://github.com/AGI-Edgerunners/LLM-Adapters)).
-  * [**scikit-learn**](https://scikit-learn.org/stable/) from [community contributors](https://github.com/scikit-learn/scikit-learn/graphs/contributors), from which we adapted the `IncrementalPCA` module.
+  * [**`scikit-learn`**](https://scikit-learn.org/stable/) from [community contributors](https://github.com/scikit-learn/scikit-learn/graphs/contributors), from which we adapted the `IncrementalPCA` module.
