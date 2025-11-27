@@ -13,5 +13,5 @@ datasets
 psutil
 setuptools
 fire
-sklearn
+scikit-learn
 pillow

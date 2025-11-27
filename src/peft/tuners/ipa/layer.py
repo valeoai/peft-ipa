@@ -90,7 +90,7 @@ class LinearProj(nn.Module):
         return F.linear(input, self.basis)
     
     @torch.no_grad()
-    def batched_incremental_pca_update(self, x: torch.Tensor, svd_niter=3):
+    def batched_ipca_update(self, x: torch.Tensor, svd_niter=3):
         with torch.autocast(device_type="cuda", dtype=torch.float32):
             dim = x.size(-1)
             reshaped_x = x.reshape(-1, dim)
@@ -126,7 +126,7 @@ class LinearProj(nn.Module):
             self.basis.data = self.components.to(dtype=self.basis.dtype)
 
     @torch.no_grad()
-    def batched_hebbian_update(self, x: torch.Tensor, lr=1e-3, reortho=False):
+    def batched_gha_update(self, x: torch.Tensor, lr=1e-3, reortho=False):
         with torch.autocast(device_type="cuda", dtype=torch.float32):
             reshaped_x = x.reshape(-1, x.size(-1))
             batch_size = reshaped_x.size(0)
@@ -534,9 +534,9 @@ class Linear(nn.Module, IPALayer):
 
             for active_adapter in self.active_adapters:
                 if self.ipa_mode.startswith("pre_ipca"):
-                    self.ipa_P[active_adapter].batched_incremental_pca_update(x)
-                elif self.ipa_mode.startswith("pre_hebbian"):
-                    self.ipa_P[active_adapter].batched_hebbian_update(x)
+                    self.ipa_P[active_adapter].batched_ipca_update(x)
+                elif self.ipa_mode.startswith("pre_gha"):
+                    self.ipa_P[active_adapter].batched_gha_update(x)
 
             result = self.base_layer(x, *args, **kwargs)
 
@@ -556,14 +556,17 @@ class Linear(nn.Module, IPALayer):
                 scaling = self.scaling[active_adapter]
                 x = x.to(ipa_B.weight.dtype)
 
-                if self.training and self.ipa_mode.startswith("online_hebbian"):
-                    ipa_P.batched_hebbian_update(x)
+                if self.training and self.ipa_mode.startswith("online_gha"):
+                    ipa_P.batched_gha_update(x)
                 elif self.training and self.ipa_mode.startswith("online_ipca"):
-                    ipa_P.batched_incremental_pca_update(x)
+                    ipa_P.batched_ipca_update(x)
                 elif self.training and self.ipa_mode.startswith("rand_ortho"):
                     if ipa_P.is_first_run:
                         with torch.no_grad():
                             nn.init.orthogonal_(ipa_P.basis)
+                            dim_in = ipa_P.basis.shape[1]
+                            dim_out = ipa_P.basis.shape[0]
+                            ipa_P.basis.data.mul_(math.sqrt(dim_in / dim_out))
                             ipa_P.is_first_run.fill_(False)
                 elif self.training and self.ipa_mode == "moving_avg":
                     ipa_P.batch_basis_moving_average(x)

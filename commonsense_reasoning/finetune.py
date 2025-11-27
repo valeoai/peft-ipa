@@ -263,6 +263,7 @@ def train(
             target_modules=target_modules,
             bias="none",
             task_type="CAUSAL_LM",
+            vera_dropout=lora_dropout,
             save_projection=False,
         )
     elif adapter_name == 'ipa':
@@ -379,7 +380,7 @@ def train(
     )
     model.config.use_cache = False
     if 'pre' in ipa_mode:
-        # Input projection pretraining: 
+        print("Start pretraining......")
 
         accelerator = Accelerator(mixed_precision='fp16')
         frac_train_data = train_data.select(range(int(len(train_data) * pre_data)))
@@ -387,12 +388,13 @@ def train(
 
         with model.disable_adapter():
             model_, dataloader = accelerator.prepare(model, dataloader)
-            for _  in tqdm(range(1)):
-                with torch.no_grad():
-                    for batch in tqdm(dataloader):
-                        model_(**batch)
+            with torch.no_grad():
+                for batch in tqdm(dataloader):
+                    model_(**batch)
 
-    print("start finetuning......")
+        print("Finished pretraining.")
+
+    print("Start finetuning......")
 
     trainer.train(resume_from_checkpoint=resume_from_checkpoint)
     model.save_pretrained(output_dir)

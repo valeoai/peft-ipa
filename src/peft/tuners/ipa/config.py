@@ -67,7 +67,7 @@ class IPAConfig(PeftConfig):
             excluding the output layer. If this is not specified, modules will be chosen according to the model
             architecture. If the architecture is not known, an error will be raised -- in this case, you should specify
             the target modules manually.
-        ipa_alpha (`int`):
+        scaling (`float`):
             The alpha parameter for IPA scaling.
         ipa_dropout (`float`):
             The dropout probability for IPA layers.
@@ -78,25 +78,8 @@ class IPAConfig(PeftConfig):
             Bias type for LoRA. Can be 'none', 'all' or 'ipa_only'. If 'all' or 'ipa_only', the corresponding biases
             will be updated during training. Be aware that this means that, even when disabling the adapters, the model
             will not produce the same output as the base model would have without adaptation.
-        use_rsipa (`bool`):
-            When set to True, uses <a href='https://doi.org/10.48550/arXiv.2312.03732'>Rank-Stabilized LoRA</a> which
-            sets the adapter scaling factor to `ipa_alpha/math.sqrt(r)`, since it was proven to work better.
-            Otherwise, it will use the original default value of `ipa_alpha/r`.
         modules_to_save (`List[str]`):
             List of modules apart from adapter layers to be set as trainable and saved in the final checkpoint.
-        init_ipa_weights (`bool` | `Literal["gaussian", "oipa", "pissa", "pissa_niter_[number of iters]", "loftq"]`):
-            How to initialize the weights of the adapter layers. Passing True (default) results in the default
-            initialization from the reference implementation from Microsoft. Passing 'gaussian' results in Gaussian
-            initialization scaled by the LoRA rank for linear and layers. Setting the initialization to False leads to
-            completely random initialization and is discouraged. Pass `'loftq'` to use LoftQ initialization. Pass
-            `'oipa'` to use OLoRA initialization. Passing `'pissa'` results in the initialization of <a
-            href='https://arxiv.org/abs/2404.02948'>Principal Singular values and Singular vectors Adaptation
-            (PiSSA)</a>, which converges more rapidly than LoRA and ultimately achieves superior performance. Moreover,
-            PiSSA reduces the quantization error compared to QLoRA, leading to further enhancements. Passing
-            `'pissa_niter_[number of iters]'` initiates Fast-SVD-based PiSSA initialization, where `[number of iters]`
-            indicates the number of subspace iterations to perform FSVD, and must be a nonnegative integer. When
-            `[number of iters]` is set to 16, it can complete the initialization of a 7B model within seconds, and the
-            training effect is approximately equivalent to using SVD.
         layers_to_transform (`Union[List[int], int]`):
             The layer indices to transform. If a list of ints is passed, it will apply the adapter to the layer indices
             that are specified in this list. If a single integer is passed, it will apply the transformations on the
@@ -116,10 +99,6 @@ class IPAConfig(PeftConfig):
             parameter when you want to apply LoRA to the ColumnParallelLinear and RowParallelLinear layers of megatron.
         megatron_core (`Optional[str]`):
             The core module from Megatron to use, defaults to `"megatron.core"`.
-        loftq_config (`Optional[LoftQConfig]`):
-            The configuration of LoftQ. If this is not None, then LoftQ will be used to quantize the backbone weights
-            and initialize IPA layers. Also pass `init_ipa_weights='loftq'`. Note that you should not pass a
-            quantized model in this case, as LoftQ will quantize the model itself.
         use_dora (`bool`):
             Enable 'Weight-Decomposed Low-Rank Adaptation' (DoRA). This technique decomposes the updates of the weights
             into two parts, magnitude and direction. Direction is handled by normal LoRA, whereas the magnitude is
@@ -127,10 +106,6 @@ class IPAConfig(PeftConfig):
             ranks. Right now, DoRA only supports linear and Conv2D layers. DoRA introduces a bigger overhead than pure
             LoRA, so it is recommended to merge weights for inference. For more information, see
             https://arxiv.org/abs/2402.09353.
-        layer_replication (`List[Tuple[int, int]]`):
-            Build a new stack of layers by stacking the original model layers according to the ranges specified. This
-            allows expanding (or shrinking) the model without duplicating the base model weights. The new layers will
-            all have separate LoRA adapters attached to them.
         runtime_config (`IPARuntimeConfig`):
             Runtime configurations (which are not saved or restored).
     """
@@ -150,7 +125,7 @@ class IPAConfig(PeftConfig):
     )
     scaling: float = field(default=0.25, metadata={"help": "IPA scaling"})
     ipa_dropout: float = field(default=0.0, metadata={"help": "IPA dropout"})
-    ipa_mode: Literal["moving_avg", "ipca", "ipca_hira", "rand_ortho"] = field(default="moving_avg", metadata={"help": "Define the running mode of IPA"})
+    ipa_mode: Literal["pre_ipca", "pre_gha", "online_ipca", "online_gha"] = field(default="moving_avg", metadata={"help": "Define the running mode of IPA"})
     fan_in_fan_out: bool = field(
         default=False,
         metadata={"help": "Set this to True if the layer to replace stores weight like (fan_in, fan_out)"},
